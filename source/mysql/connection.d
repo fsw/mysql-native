@@ -1182,65 +1182,6 @@ byte getNumLCBBytes(in ubyte lcbHeader) pure nothrow
     assert(0);
 }
 
-/** Parse Length Coded Binary
- *
- * See_Also: http://forge.mysql.com/wiki/MySQL_Internals_ClientServer_Protocol#Elements
- */
-ulong parseLCB(ref ubyte* ubp, out bool nullFlag) pure nothrow
-{
-    nullFlag = false;
-    ulong t;
-    byte numLCBBytes = getNumLCBBytes(*ubp);
-    switch (numLCBBytes)
-    {
-        case 0: // Null - only for Row Data Packet
-            nullFlag = true;
-            t = 0;
-            break;
-        case 8: // 64-bit
-            t |= ubp[8];
-            t <<= 8;
-            t |= ubp[7];
-            t <<= 8;
-            t |= ubp[6];
-            t <<= 8;
-            t |= ubp[5];
-            t <<= 8;
-            t |= ubp[4];
-            t <<= 8;
-            ubp += 5;
-            goto case;
-        case 3: // 24-bit
-            t |= ubp[3];
-            t <<= 8;
-            t |= ubp[2];
-            t <<= 8;
-            t |= ubp[1];
-            ubp += 3;
-            goto case;
-        case 2: // 16-bit
-            t |= ubp[2];
-            t <<= 8;
-            t |= ubp[1];
-            ubp += 2;
-            break;
-        case 1: // 8-bit
-            t = cast(ulong)*ubp;
-            break;
-        default:
-            assert(0);
-    }
-    ubp++;
-    return t;
-}
-
-/// ditto
-ulong parseLCB(ref ubyte* ubp) pure nothrow
-{
-    bool isNull;
-    return parseLCB(ubp, isNull);
-}
-
 /**
  * Length Coded Binary Value
  * */
@@ -1373,40 +1314,16 @@ body
     if(lcb.isNull || lcb.isIncomplete)
         return lcb;
     assert(packet.length >= lcb.totalBytes);
-    //lcb.value = packet.decode!ulong(lcb.numBytes);
-    lcb.value = 0;
-	switch (lcb.numBytes)
-	{
-		case 0: // Null - only for Row Data Packet
-			lcb.value = 0;
-			break;
-		case 8: // 64-bit
-			lcb.value |= packet[8];
-			lcb.value <<= 8;
-			lcb.value |= packet[7];
-			lcb.value <<= 8;
-			lcb.value |= packet[6];
-			lcb.value <<= 8;
-			lcb.value |= packet[5];
-			lcb.value <<= 8;
-			lcb.value |= packet[4];
-			lcb.value <<= 8;
-			goto case;
-		case 3: // 24-bit
-			lcb.value |= packet[3];
-			lcb.value <<= 8;
-			goto case;
-		case 2: // 16-bit
-			lcb.value |= packet[2];
-			lcb.value <<= 8;
-			lcb.value |= packet[1];
-			break;
-		case 1: // 8-bit
-			lcb.value = cast(ulong)packet[0];
-			break;
-		default:
-			assert(0);
-	}
+
+    if(lcb.numBytes == 0)
+        lcb.value = 0;
+    else if(lcb.numBytes == 1)
+        lcb.value = packet.decode!ulong(lcb.numBytes);
+    else
+    {
+        // Skip the throwaway byte that indicated "at least 2 more bytes coming"
+        lcb.value = packet[1..$].decode!ulong(lcb.numBytes);
+    }
 
     return lcb;
 }
@@ -3070,7 +2987,8 @@ public:
      */
     inout(Variant) opIndex(size_t i) inout
     {
-        enforceEx!MYX(i < _nulls.length, format("Cannot get column %d of %d. Index out of bounds", i, _nulls.length));
+        enforceEx!MYX(_nulls.length > 0, format("Cannot get column index %d. There are no columns", i));
+        enforceEx!MYX(i < _nulls.length, format("Cannot get column index %d. The last available index is %d", i, _nulls.length-1));
         enforceEx!MYX(!_nulls[i], format("Column %s is null, check for isNull", i));
         return _values[i];
     }
